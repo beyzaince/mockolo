@@ -66,7 +66,7 @@ func lookupEntities(key: String,
                 }
             }
         }
-    } else if let parentMock = inheritanceMap["\(key)Mock"], declType == .protocolType {
+    } else if let parentMock = inheritanceMap["Mock\(key)"], declType == .protocolType {
         // If the parent protocol is not in the protocol map, look it up in the input parent mocks map.
         let sub = parentMock.entityNode.subContainer(metadata: parentMock.metadata, declType: declType, path: parentMock.filepath, data: parentMock.data, isProcessed: parentMock.isProcessed)
         processedModels.append(contentsOf: sub.members)

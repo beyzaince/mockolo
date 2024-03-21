@@ -17,6 +17,22 @@
 import Foundation
 
 extension ClassModel {
+    private func createUniqueId(model: MethodModel, uniqueId: String, uniqueIds: [String]) -> String {
+        var _uniqueId: String = uniqueId
+        var index = 0
+        let params = model.params
+        while uniqueIds.contains(_uniqueId) {
+            if params.count > index {
+                let param = params[index]
+                _uniqueId = _uniqueId + param.name.capitalizeFirstLetter
+            } else {
+                _uniqueId = _uniqueId + String(index)
+            }
+            index = index + 1
+        }
+        return _uniqueId
+    }
+
     func applyClassTemplate(name: String,
                             identifier: String,
                             accessLevel: String,
@@ -37,8 +53,17 @@ extension ClassModel {
         
         let acl = accessLevel.isEmpty ? "" : accessLevel + " "
         let typealiases = typealiasWhitelist(in: entities)
+        var enumElements = """
+                           """
+        var uniqueIds: [String] = []
         let renderedEntities = entities
             .compactMap { (uniqueId: String, model: Model) -> (String, Int64)? in
+                if model.name.contains("MockIdentifier") {
+                    return nil
+                }
+                if model.name.contains("invokedList") {
+                    return nil
+                }
                 if model.modelType == .typeAlias, let _ = typealiases?[model.name] {
                     // this case will be handlded by typealiasWhitelist look up later
                     return nil
@@ -50,7 +75,55 @@ extension ClassModel {
                     return nil
                 }
                 if let ret = model.render(with: uniqueId, encloser: name, useTemplateFunc: useTemplateFunc, useMockObservable: useMockObservable, allowSetCallCount: allowSetCallCount, mockFinal: mockFinal, enableFuncArgsHistory: enableFuncArgsHistory, disableCombineDefaultValues: disableCombineDefaultValues) {
-                    return (ret, model.offset)
+                    var _ret = ret
+                    if let variableModel = model as? VariableModel {
+                        if !variableModel.name.contains("stubbed") {
+                            let ifSetterExists = (variableModel.modelDescription?.contains("get set") ?? false ||
+                                                  variableModel.modelDescription?.contains("set get") ?? false ||
+                                                  variableModel.modelDescription?.contains("set {") ?? false
+                            )
+                            if ifSetterExists {
+                                enumElements += "\n\(1.tab)case \(uniqueId)Setter(value: \(variableModel.type.typeName))"
+                            }
+                            enumElements += "\n\(1.tab)case \(uniqueId)Getter"
+                            uniqueIds.append(uniqueId)
+                        }
+                    }
+                    if let methodModel = model as? MethodModel {
+                        var _uniqueId = uniqueId
+
+                        if !methodModel.params.isEmpty {
+                            if methodModel.processed,
+                               let modelDesc = methodModel.modelDescription {
+                                _uniqueId = modelDesc.slice(from: "append(.", to: "(") ?? uniqueId
+                            }
+                            let params = methodModel.params.map{ $0.name + ": " + $0.type.typeName.replacingOccurrences(of: "@escaping", with: "") }.joined(separator: ", ")
+                            if !uniqueIds.contains(_uniqueId) {
+                                enumElements += "\n\(1.tab)case \(_uniqueId)(\(params))"
+                            } else {
+                                _uniqueId = createUniqueId(model: methodModel, uniqueId: uniqueId, uniqueIds: uniqueIds)
+                                _ret = _ret.replacingOccurrences(of: "append(.\(uniqueId)", with: "append(.\(_uniqueId)")
+                                enumElements += "\n\(1.tab)case \(_uniqueId)(\(params))"
+                            }
+                            uniqueIds.append(_uniqueId)
+                        } else {
+                            if methodModel.processed,
+                               let modelDesc =  methodModel.modelDescription {
+                                _uniqueId = modelDesc.slice(from: "append(.", to: ")") ?? uniqueId
+                                if !uniqueIds.contains(_uniqueId) {
+                                    enumElements += "\n\(1.tab)case \(_uniqueId)"
+                                } else {
+                                    _uniqueId = createUniqueId(model: methodModel, uniqueId: uniqueId, uniqueIds: uniqueIds)
+                                    _ret = _ret.replacingOccurrences(of: "append(.\(uniqueId)", with: "append(.\(_uniqueId)")
+                                    enumElements += "\n\(1.tab)case \(_uniqueId)"
+                                }
+                            } else {
+                                enumElements += "\n\(1.tab)case \(_uniqueId)"
+                            }
+                            uniqueIds.append(_uniqueId)
+                        }
+                    }
+                    return (_ret, model.offset)
                 }
                 return nil
         }
@@ -63,15 +136,6 @@ extension ClassModel {
         .map {$0.0}
         .joined(separator: "\n")
         
-        var typealiasTemplate = ""
-        let addAcl = declType == .protocolType ? acl : ""
-        if let typealiasWhitelist = typealiases {
-            typealiasTemplate = typealiasWhitelist.map { (arg: (key: String, value: [String])) -> String in
-                let joinedType = arg.value.sorted().joined(separator: " & ")
-                return  "\(1.tab)\(addAcl)\(String.typealias) \(arg.key) = \(joinedType)"
-            }.joined(separator: "\n")
-        }
-        
         var moduleDot = ""
         if let moduleName = metadata?.module, !moduleName.isEmpty {
             moduleDot = moduleName + "."
@@ -80,37 +144,53 @@ extension ClassModel {
         let extraInits = extraInitsIfNeeded(initParamCandidates: initParamCandidates, declaredInits: declaredInits,  acl: acl, declType: declType, overrides: metadata?.varTypes)
 
         var body = ""
-        if !typealiasTemplate.isEmpty {
-            body += "\(typealiasTemplate)\n"
-        }
         if !extraInits.isEmpty {
-            body += "\(extraInits)\n"
+            body += "\(extraInits)"
         }
         if !renderedEntities.isEmpty {
             body += "\(renderedEntities)"
         }
 
-        let finalStr = mockFinal ? "\(String.final) " : ""
-        let template = """
+        body = body.replacingOccurrences(of: "}\n    ", with: "}\n\n    ")
+
+        var template = """
+        \(acl)final class \(name): \(moduleDot)\(identifier), MockAssertable {
+        """
+
+        template = """
+        \(template)
+        \(1.tab)\(acl)typealias MockIdentifier = \(name)Elements
+        \(1.tab)\(acl)var invokedList: [\(name)Elements] = []
+        """
+
+        template = """
+        \(template)
         \(attribute)
-        \(acl)\(finalStr)class \(name): \(moduleDot)\(identifier) {
         \(body)
         }
         """
+
+        template = """
+        \(template)
+        \(acl)enum \(name)Elements: MockEquatable {
+        \(1.tab)\(enumElements)
+        }
+        """
+
+        template = template.replacingOccurrences(of: "\n}\nenum", with: "\n}\n\nenum")
+        template = template.replacingOccurrences(of: "MockEquatable {\n    \n", with: "MockEquatable {\n")
         
         return template
     }
     
-    private func extraInitsIfNeeded(
-        initParamCandidates: [Model],
-        declaredInits: [MethodModel],
-        acl: String,
-        declType: DeclType,
-        overrides: [String: String]?
-    ) -> String {
+    private func extraInitsIfNeeded(initParamCandidates: [Model],
+                                    declaredInits: [MethodModel],
+                                    acl: String,
+                                    declType: DeclType,
+                                    overrides: [String: String]?) -> String {
         
         let declaredInitParamsPerInit = declaredInits.map { $0.params }
-
+        
         var needParamedInit = false
         var needBlankInit = false
         
@@ -140,36 +220,7 @@ extension ClassModel {
         }
         
         var initTemplate = ""
-        if needParamedInit {
-            var paramsAssign = ""
-            let params = initParamCandidates
-                .map { (element: Model) -> String in
-                    if let val =  element.type.defaultVal(with: overrides, overrideKey: element.name, isInitParam: true) {
-                        return "\(element.name): \(element.type.typeName) = \(val)"
-                    }
-                    var prefix = ""
-                    if element.type.hasClosure {
-                        if !element.type.isOptional {
-                            prefix = String.escaping + " "
-                        }
-                    }
-                    return "\(element.name): \(prefix)\(element.type.typeName)"
-            }
-            .joined(separator: ", ")
 
-            
-            paramsAssign = initParamCandidates.map { p in
-                return "\(2.tab)self.\(p.underlyingName) = \(p.name.safeName)"
-                
-            }.joined(separator: "\n")
-            
-            initTemplate = """
-            \(1.tab)\(acl)init(\(params)) {
-            \(paramsAssign)
-            \(1.tab)}
-            """
-        }
-        
         let extraInitParamNames = initParamCandidates.map{$0.name}
         let extraVarsToDecl = declaredInitParamsPerInit.flatMap{$0}.compactMap { (p: ParamModel) -> String? in
             if !extraInitParamNames.contains(p.name) {
@@ -291,6 +342,17 @@ extension ClassModel {
                 matchingAliasModel.propertyWrapper = wrapper
             } else {
                 variableModel.combineType = .passthroughSubject
+            }
+        }
+    }
+}
+
+extension String {
+
+    func slice(from: String, to: String) -> String? {
+        return (range(of: from)?.upperBound).flatMap { substringFrom in
+            (range(of: to, range: substringFrom..<endIndex)?.lowerBound).map { substringTo in
+                String(self[substringFrom..<substringTo])
             }
         }
     }

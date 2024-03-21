@@ -57,7 +57,6 @@ extension MethodModel {
             let callCount = "\(identifier)\(String.callCountSuffix)"
             let handlerVarName = "\(identifier)\(String.handlerSuffix)"
             let handlerVarType = handler.type.typeName // ?? "Any"
-            let handlerReturn = handler.render(with: identifier, encloser: "") ?? ""
 
             let suffixStr = suffix.isEmpty ? "" : "\(suffix) "
             let returnStr = returnTypeName.isEmpty ? "" : "-> \(returnTypeName)"
@@ -91,10 +90,6 @@ extension MethodModel {
             }
 
             if body.isEmpty {
-                body = """
-                \(2.tab)\(callCount) += 1
-                """
-
                 if let argsHistory = argsHistory, argsHistory.enable(force: enableFuncArgsHistory) {
                     let argsHistoryCapture = argsHistory.render(with: identifier, encloser: "", enableFuncArgsHistory: enableFuncArgsHistory) ?? ""
 
@@ -103,11 +98,6 @@ extension MethodModel {
                     \(2.tab)\(argsHistoryCapture)
                     """
                 }
-
-                body = """
-                \(body)
-                \(handlerReturn)
-                """
             }
 
             var wrapped = body
@@ -123,37 +113,121 @@ extension MethodModel {
             let overrideStr = isOverride ? "\(String.override) " : ""
             let modifierTypeStr: String
             if let customModifiers = customModifiers,
-            let customModifier: Modifier = customModifiers[name] {
+               let customModifier: Modifier = customModifiers[name] {
                 modifierTypeStr = customModifier.rawValue + " "
             } else {
                 modifierTypeStr = ""
             }
-            let privateSetSpace = allowSetCallCount ? "" : "\(String.privateSet) "
+            
+            if !returnType.isUnknown {
+                if params.isEmpty {
+                    template = """
+                    \(template)
+                    \(1.tab)var stubbed\(name.capitalizeFirstLetter)Result: \(returnTypeName)!
+                    \(1.tab)\n
+                    """
+                } else {
+                    let paramsInputs = params.map{$0.name.capitalizeFirstLetter}.joined(separator: "")
+                    template = """
+                    \(template)
+                    \(1.tab)var stubbed\(name.capitalizeFirstLetter)\(paramsInputs)Result: \(returnTypeName)!
+                    \(1.tab)\n
+                    """
+                }
+            }
+            var stubbedCompletionResult = ""
 
-            template = """
+            if !params.isEmpty {
+                params.forEach { param in
+                    if param.type.typeName.contains("->") || param.type.typeName.contains("escaping") {
+                        var stubbedType = param.type.typeName.replacingOccurrences(of: "@escaping", with: "")
+                        stubbedType = stubbedType.trimmingCharacters(in: .whitespaces)
+                        let stubbedTupleItems = stubbedType.components(separatedBy: "->")
+                        var firstItem = stubbedTupleItems.first?.trimmingCharacters(in: .whitespaces) ?? "Void"
+                        var tempFirstItem = firstItem
+                        tempFirstItem.removeAll(where: { $0 == "(" || $0 == ")" })
 
-            \(1.tab)\(acl)\(staticStr)\(privateSetSpace)var \(callCount) = 0
-            """
+                        // if is not a tuple
+                        if !tempFirstItem.contains(",") {
+                            firstItem = tempFirstItem
+                        }
+                        let optionalIfNeeded = stubbedType.last == "?" ? "?" : ""
+                        var stubbedName = firstItem.isEmpty ? "shouldInvoke\(identifier.capitalizeFirstLetter)\(param.name.capitalizeFirstLetter)" : "stubbed\(identifier.capitalizeFirstLetter)\(param.name.capitalizeFirstLetter)"
+                        stubbedName += stubbedName.contains("Result") ? "" : "Result"
+                        let stubbedIfCodes = firstItem.isEmpty
+                        ? "if \(stubbedName) {\n\t\t\t\(param.name)\(optionalIfNeeded)()\n\t\t}"
+                        : "if let \(stubbedName) = \(stubbedName) {\n\t\t\t\(param.name)\(optionalIfNeeded)(\(stubbedName).0)\n\t\t}"
+                        
+                        stubbedCompletionResult = "\(stubbedCompletionResult)\(2.tab)\(stubbedIfCodes)"
+                        var invokedCompletionVariable = ""
+                        if stubbedTupleItems.count == 1 {
+                            invokedCompletionVariable = "\(acl)var \(stubbedName)\(firstItem.isEmpty ?  " = false" : ": (\(firstItem)")"
+                        } else {
+                            let lastItem = stubbedTupleItems.last?.trimmingCharacters(in: .whitespaces) ?? "(unknown)"
+                            invokedCompletionVariable = "\(acl)var \(stubbedName)\(firstItem.isEmpty ?  " = false" : ": (\(firstItem),\(lastItem)") "
+                        }
 
-            if let argsHistory = argsHistory, argsHistory.enable(force: enableFuncArgsHistory) {
-                let argsHistoryVarName = "\(identifier)\(String.argsHistorySuffix)"
-                let argsHistoryVarType = argsHistory.type.typeName
+                        if !firstItem.isEmpty {
+                            invokedCompletionVariable += stubbedType.last == "?" ? "" : ")?"
+                        }
+                        template = """
+                        \(template)
+                        \(1.tab)\(invokedCompletionVariable)
+                        """
 
-                template = """
-                \(template)
-                \(1.tab)\(acl)\(staticStr)var \(argsHistoryVarName) = \(argsHistoryVarType)()
-                """
+                    }
+                }
             }
 
             template = """
             \(template)
-            \(1.tab)\(acl)\(staticStr)var \(handlerVarName): \(handlerVarType)
-            \(1.tab)\(acl)\(staticStr)\(overrideStr)\(modifierTypeStr)\(keyword)\(name)\(genericTypesStr)(\(paramDeclsStr)) \(suffixStr)\(returnStr)\(genericWhereStr) {
-            \(wrapped)
-            \(1.tab)}
+            \(1.tab)\(acl)\(staticStr)\(overrideStr)\(modifierTypeStr)\(keyword)\(name)\(genericTypesStr)(\(paramDeclsStr)) \(suffixStr)\(returnStr)\(genericWhereStr){\(wrapped)
             """
+
+            if params.isEmpty {
+                template = """
+                \(template)
+                \(2.tab)invokedList.append(.\(identifier))
+                """
+            } else {
+                let paramsInputs = params.map{$0.name + ": " + $0.name}.joined(separator: ", ")
+                template = """
+                \(template)
+                \(2.tab)invokedList.append(.\(identifier)(\(paramsInputs)))
+                """
+            }
+
+            if stubbedCompletionResult.count > 0 {
+                template = """
+                \(template)
+                \(stubbedCompletionResult)
+                """
+            }
+
+            if !returnType.isUnknown {
+                if params.isEmpty {
+                    template = """
+                    \(template)
+                    \(2.tab)return stubbed\(name.capitalizeFirstLetter)Result
+                    \(1.tab)}
+                    """
+                } else {
+                    let paramsInputs = params.map{$0.name.capitalizeFirstLetter}.joined(separator: "")
+                    template = """
+                    \(template)
+                    \(2.tab)return stubbed\(name.capitalizeFirstLetter)\(paramsInputs.capitalizeFirstLetter)Result
+                    \(1.tab)}
+                    """
+                }
+            } else {
+                template = """
+                \(template)
+                \t}
+                """
+            }
         }
 
         return template
     }
 }
+

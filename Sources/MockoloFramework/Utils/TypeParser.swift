@@ -40,10 +40,6 @@ public final class Type {
         return typeName.hasPrefix(String.autoclosure)
     }
 
-    var isOpaqueType: Bool {
-        typeName.contains(String.some + " ")
-    }
-
     var isRxObservable: Bool {
         return typeName.hasPrefix(.rxObservableLeftAngleBracket) || typeName.hasPrefix(.observableLeftAngleBracket)
     }
@@ -615,9 +611,9 @@ public final class Type {
         } else {
             let hasGenericType = typeParamList.filter{ (item: String) -> Bool in
                 ret.literalComponents.contains(item)
-            }.isEmpty == false
+            }
 
-            if hasGenericType || isOpaqueType {
+            if !hasGenericType.isEmpty {
                 ret = .any
                 if isTypeOptional {
                     ret += "?"

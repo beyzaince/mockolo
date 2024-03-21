@@ -27,9 +27,10 @@ extension VariableModel {
                                shouldOverride: Bool,
                                accessLevel: String) -> String {
 
-        let underlyingSetCallCount = "\(name)\(String.setCallCountSuffix)"
+        let underlyingSetCallCount = "\(String.setCallCountSuffix)\(name.capitalizeFirstLetter)"
         let underlyingVarDefaultVal = type.defaultVal()
         var underlyingType = type.typeName
+        var forcedType = type.typeName.replacingOccurrences(of: "?", with: "") + "!"
         if underlyingVarDefaultVal == nil {
             underlyingType = type.underlyingType
         }
@@ -48,7 +49,7 @@ extension VariableModel {
         }
 
         let privateSetSpace = allowSetCallCount ? "" :  "\(String.privateSet) "
-        let setCallCountStmt = "\(underlyingSetCallCount) += 1"
+        let setCallCountStmt = "\(underlyingSetCallCount): \(underlyingType)"
 
         let modifierTypeStr: String
         if let customModifiers = self.customModifiers,
@@ -61,21 +62,61 @@ extension VariableModel {
         var template = ""
         if isStatic || underlyingVarDefaultVal == nil {
             let staticSpace = isStatic ? "\(String.static) " : ""
-            template = """
 
-            \(1.tab)\(acl)\(staticSpace)\(privateSetSpace)var \(underlyingSetCallCount) = 0
-            \(1.tab)\(propertyWrapper)\(staticSpace)private var \(underlyingName): \(underlyingType) \(assignVal) { didSet { \(setCallCountStmt) } }
-            \(1.tab)\(acl)\(staticSpace)\(overrideStr)\(modifierTypeStr)var \(name): \(type.typeName) {
-            \(2.tab)get { return \(underlyingName) }
-            \(2.tab)set { \(underlyingName) = newValue }
-            \(1.tab)}
-            """
+            let ifSetterExists = (modelDescription?.contains("get set") ?? false ||
+                                  modelDescription?.contains("set get") ?? false)
+            if ifSetterExists {
+                template = """
+
+                \(1.tab)\(acl)\(staticSpace)var \(setCallCountStmt)\n
+                \(1.tab)\(propertyWrapper)\(staticSpace)var \(name): \(type.typeName) \(assignVal){
+                \(2.tab)set {
+                \(3.tab)\(underlyingSetCallCount) = newValue
+                \(3.tab)invokedList.append(.\(name)Setter(value: newValue))
+                \(2.tab)}
+                \(2.tab)get {
+                \(3.tab)invokedList.append(.\(name)Getter)
+                \(3.tab)return \(underlyingSetCallCount)
+                \(2.tab)}
+                \(1.tab)}
+                """
+            } else {
+                template = """
+
+                \(1.tab)\(acl)\(staticSpace)var \(setCallCountStmt)\n
+                \(1.tab)\(propertyWrapper)\(staticSpace)var \(name): \(type.typeName) \(assignVal){
+                \(2.tab)invokedList.append(.\(name)Getter)
+                \(2.tab)return \(underlyingSetCallCount)
+                \(1.tab)}
+                """
+            }
         } else {
-            template = """
+            let ifSetterExists = (modelDescription?.contains("get set") ?? false ||
+                                  modelDescription?.contains("set get") ?? false)
 
-            \(1.tab)\(acl)\(privateSetSpace)var \(underlyingSetCallCount) = 0
-            \(1.tab)\(propertyWrapper)\(acl)\(overrideStr)\(modifierTypeStr)var \(name): \(type.typeName) \(assignVal) { didSet { \(setCallCountStmt) } }
-            """
+            if ifSetterExists {
+                template = """
+                \(1.tab)\(acl)var \(underlyingSetCallCount): \(forcedType)
+                \(1.tab)\(propertyWrapper)\(acl)\(overrideStr)\(modifierTypeStr)var \(name): \(type.typeName) {
+                \(2.tab)set {
+                \(3.tab)\(underlyingSetCallCount) = newValue
+                \(3.tab)invokedList.append(.\(name)Setter(value: newValue))
+                \(2.tab)}
+                \(2.tab)get {
+                \(3.tab)invokedList.append(.\(name)Getter)
+                \(3.tab)return \(underlyingSetCallCount)
+                \(2.tab)}
+                \(1.tab)}
+                """
+            } else {
+                template = """
+                \(1.tab)\(acl)var \(underlyingSetCallCount): \(forcedType)
+                \(1.tab)\(propertyWrapper)\(acl)\(overrideStr)\(modifierTypeStr)var \(name): \(type.typeName) {
+                \(2.tab)invokedList.append(.\(name)Getter)
+                \(2.tab)return \(underlyingSetCallCount)
+                \(1.tab)}
+                """
+            }
         }
 
         return template

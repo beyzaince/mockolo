@@ -21,7 +21,7 @@ func write(candidates: [(String, Int64)],
            header: String?,
            macro: String?,
            imports: String,
-           to outputFilePath: String) throws -> String {
+           to outputFilePath: String) -> String {
 
     let entities = candidates
         .sorted { (left: (String, Int64), right: (String, Int64)) -> Bool in
@@ -39,14 +39,20 @@ func write(candidates: [(String, Int64)],
         macroStart = .poundIf + mcr
         macroEnd = .poundEndIf
     }
-    let ret = [headerStr, macroStart, imports, entities.joined(separator: "\n"), macroEnd].joined(separator: "\n\n")
+
+    //disable for stub
+//    let ret = [headerStr, macroStart, imports, entities.joined(separator: "\n"), macroEnd].joined(separator: "\n\n")
+
+    let ret = [macroStart, entities.joined(separator: "\n"), macroEnd].joined(separator: "")
+
     let currentFileContents = try? String(contentsOfFile: outputFilePath, encoding: .utf8)
     guard currentFileContents != ret else {
         log("Not writing the file as content is unchanged", level: .info)
         return ret
     }
 
-    _ = try ret.write(toFile: outputFilePath, atomically: true, encoding: .utf8)
+    _ = try? ret.write(to: URL(fileURLWithPath: outputFilePath), atomically: true, encoding: .utf8)
+//    ret.write(toFile: outputFilePath, atomically: true, encoding: .utf8)
     return ret
 }
 

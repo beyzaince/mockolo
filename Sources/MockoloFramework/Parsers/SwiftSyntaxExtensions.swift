@@ -40,7 +40,7 @@ extension AttributeListSyntax {
 extension ModifierListSyntax {
     var acl: String {
         for modifier in self {
-            for token in modifier.tokens(viewMode: .sourceAccurate) {
+            for token in modifier.tokens {
                 switch token.tokenKind {
                 case .publicKeyword, .internalKeyword, .privateKeyword, .fileprivateKeyword:
                     return token.text
@@ -57,31 +57,31 @@ extension ModifierListSyntax {
     }
 
     var isStatic: Bool {
-        return self.tokens(viewMode: .sourceAccurate).filter {$0.tokenKind == .staticKeyword }.count > 0
+        return self.tokens.filter {$0.tokenKind == .staticKeyword }.count > 0
     }
 
     var isRequired: Bool {
-        return self.tokens(viewMode: .sourceAccurate).filter {$0.text == String.required }.count > 0
+        return self.tokens.filter {$0.text == String.required }.count > 0
     }
 
     var isConvenience: Bool {
-        return self.tokens(viewMode: .sourceAccurate).filter {$0.text == String.convenience }.count > 0
+        return self.tokens.filter {$0.text == String.convenience }.count > 0
     }
 
     var isOverride: Bool {
-        return self.tokens(viewMode: .sourceAccurate).filter {$0.text == String.override }.count > 0
+        return self.tokens.filter {$0.text == String.override }.count > 0
     }
 
     var isFinal: Bool {
-        return self.tokens(viewMode: .sourceAccurate).filter {$0.text == String.final }.count > 0
+        return self.tokens.filter {$0.text == String.final }.count > 0
     }
 
     var isPrivate: Bool {
-        return self.tokens(viewMode: .sourceAccurate).filter {$0.tokenKind == .privateKeyword || $0.tokenKind == .fileprivateKeyword }.count > 0
+        return self.tokens.filter {$0.tokenKind == .privateKeyword || $0.tokenKind == .fileprivateKeyword }.count > 0
     }
 
     var isPublic: Bool {
-        return self.tokens(viewMode: .sourceAccurate).filter {$0.tokenKind == .publicKeyword }.count > 0
+        return self.tokens.filter {$0.tokenKind == .publicKeyword }.count > 0
     }
 }
 
@@ -89,24 +89,11 @@ extension TypeInheritanceClauseSyntax {
     var types: [String] {
         var list = [String]()
         for element in self.inheritedTypeCollection {
-            let elementNameList = parseElementType(type: element.typeName)
-            list.append(contentsOf: elementNameList)
+            if let elementName = element.firstToken?.text {
+                list.append(elementName)
+            }
         }
         return list
-    }
-
-    private func parseElementType(type: TypeSyntax) -> [String] {
-        if let simpleTypeIdentifier = type.as(SimpleTypeIdentifierSyntax.self) {
-            // example: `protocol A: B {}`
-            return [simpleTypeIdentifier.name.text]
-        } else if let tupleType = type.as(TupleTypeSyntax.self) {
-            // example: `protocol A: (B) {}`
-            return tupleType.elements.map(\.type).map(parseElementType(type:)).flatMap { $0 }
-        } else if let compositionType = type.as(CompositionTypeSyntax.self) {
-            // example: `protocol A: B & C {}`
-            return compositionType.elements.map(\.type).map(parseElementType(type:)).flatMap { $0 }
-        }
-        return []
     }
 
     var typesDescription: String {
@@ -486,7 +473,7 @@ extension InitializerDeclSyntax {
                            genericWhereClause: genericWhereClause,
                            params: params,
                            throwsOrRethrows: self.signature.throwsOrRethrowsKeyword?.text,
-                           asyncOrReasync: self.signature.asyncOrReasyncKeyword?.text,
+                           asyncOrReasync: nil, // "init() async" is not supperted in SwiftSyntax
                            isStatic: false,
                            offset: self.offset,
                            length: self.length,
@@ -601,7 +588,10 @@ final class EntityVisitor: SyntaxVisitor {
     override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind { visitImpl(node) }
 
     private func visitImpl(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind {
-        let metadata = node.annotationMetadata(with: annotation)
+        var metadata: AnnotationMetadata?
+        if node.identifier.text == annotation {
+            metadata = AnnotationMetadata()
+        }
         if let ent = Entity.node(with: node, filepath: path, isPrivate: node.isPrivate, isFinal: false, metadata: metadata, processed: false) {
             entities.append(ent)
         }
@@ -611,7 +601,7 @@ final class EntityVisitor: SyntaxVisitor {
     override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind { visitImpl(node) }
 
     private func visitImpl(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
-        if node.name.hasSuffix("Mock") {
+        if node.name.hasPrefix("Mock") {
             // this mock class node must be public else wouldn't have compiled before
             if let ent = Entity.node(with: node, filepath: path, isPrivate: node.isPrivate, isFinal: false, metadata: nil, processed: true) {
                 entities.append(ent)
@@ -719,10 +709,6 @@ extension Trivia {
 
             ret.module = arguments[.prefix]
         }
-        if let arguments = parseArguments(argsStr, identifier: .overrideColon) {
-
-            ret.nameOverride = arguments[.name]
-        }
         if let arguments = parseArguments(argsStr, identifier: .rxColon) {
 
             ret.varTypes = arguments
@@ -811,3 +797,11 @@ extension Trivia {
         return nil
     }
 }
+
+#if swift(<5.5)
+extension FunctionSignatureSyntax {
+    var asyncOrReasyncKeyword: TokenSyntax? {
+        return nil
+    }
+}
+#endif

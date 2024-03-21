@@ -88,7 +88,7 @@ extension String {
     static let annotationArgDelimiter = ";"
     static let subjectSuffix = "Subject"
     static let underlyingVarPrefix = "_"
-    static let setCallCountSuffix = "SetCallCount"
+    static let setCallCountSuffix = "stubbed"
     static let callCountSuffix = "Count"
     static let initializerLeftParen = "init("
     static let `escaping` = "@escaping"

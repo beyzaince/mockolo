@@ -49,40 +49,6 @@ final class MethodModel: Model {
     private var staticKind: String {
         return isStatic ? .static : ""
     }
-    
-    /// This is used to uniquely identify methods with the same signature and different generic requirements
-    var genericWhereClauseToSignatureComponent: String {
-        guard let genericWhereClause else {
-            return ""
-        }
-        let typeRequirementSyntax = ":"
-        let typeEqualitySyntax = "=="
-        
-        var signatureComponents: [String] = []
-        
-        genericWhereClause.deletingPrefix("where").components(separatedBy: ",").forEach { requirement in
-            if requirement.contains(typeRequirementSyntax) {
-                let components = requirement.components(separatedBy: typeRequirementSyntax).map{ $0.trimmingCharacters(in: .whitespaces) }
-                guard let key = components.first, let value = components.last else {
-                    return
-                }
-                let valueDescription = value.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "&", with: "And")
-                signatureComponents.append(contentsOf: [key, valueDescription])
-            } else if requirement.contains(typeEqualitySyntax) {
-                let components = requirement.components(separatedBy: typeEqualitySyntax).map{ $0.trimmingCharacters(in: .whitespaces) }
-                guard let key = components.first, let value = components.last else {
-                    return
-                }
-                signatureComponents.append(contentsOf: [key, value])
-            }
-        }
-        
-        return signatureComponents.map { component in
-            var newComponent = component
-            newComponent.removeAll(where: { $0 == "."})
-            return newComponent
-        }.joined()
-    }
 
     var isInitializer: Bool {
         if case .initKind(_, _) = kind {
@@ -100,8 +66,8 @@ final class MethodModel: Model {
 
     lazy var signatureComponents: [String] = {
         let paramLabels = self.params.map {$0.label != "_" ? $0.label : ""}
-        let paramNames = self.params.map(\.name)
-        let paramTypes = self.params.map(\.type)
+        let paramNames = self.params.map(path: \.name)
+        let paramTypes = self.params.map(path: \.type)
         let nameString = self.name
         var args = zip(paramLabels, paramNames).compactMap { (argLabel: String, argName: String) -> String? in
             let val = argLabel.isEmpty ? argName : argLabel
@@ -113,10 +79,8 @@ final class MethodModel: Model {
 
         let genericTypeNames = self.genericTypeParams.map { $0.name.capitalizeFirstLetter + $0.type.displayName }
         args.append(contentsOf: genericTypeNames)
-        if let genericWhereClause {
-            args.append(genericWhereClauseToSignatureComponent)
-        }
-        args.append(contentsOf: paramTypes.map(\.displayName))
+
+        args.append(contentsOf: paramTypes.map(path: \.displayName))
         var displayType = self.type.displayName
         let capped = min(displayType.count, 32)
         displayType.removeLast(displayType.count-capped)
@@ -145,8 +109,8 @@ final class MethodModel: Model {
             return nil
         }
 
-        let paramNames = self.params.map(\.name)
-        let paramTypes = self.params.map(\.type)
+        let paramNames = self.params.map(path: \.name)
+        let paramTypes = self.params.map(path: \.type)
         let ret = ClosureModel(name: name,
                                genericTypeParams: genericTypeParams,
                                paramNames: paramNames,
